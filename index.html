@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Robot Mimic — MediaPipe Hand Landmarker</title>
+<meta name="description" content="Split-screen hand tracking: your webcam hand pose on the left, a robot mirroring your gestures in real time on the right. Built on the MediaPipe Hand Landmarker task." />
+<!--
+  SINGLE-FILE VERSION (HTML + CSS + JS inline, no build step).
+  Left panel : real-time webcam hand tracking (MediaPipe Hand Landmarker)
+  Right panel: a robot that mirrors your hand gestures — arm position,
+               hand rotation, and per-finger curl — with smoothing.
+  Serve from localhost/HTTPS for camera access:
+      python3 -m http.server 8000   ->   http://localhost:8000
+-->
+<style>
+:root {
+  --bg:#ffffff; --panel:#ffffff; --ink:#171a21; --ink-soft:#5a6072;
+  --line:#e3e6ec; --accent:#4d5bf9; --viewport:#0d0f14;
+  --ok:#27c93f; --wait:#f2c14e; --err:#e8515c; --cyan:#4fd8e4;
+  --radius:16px;
+  --shadow:0 1px 2px rgba(23,26,33,.05),0 10px 30px rgba(23,26,33,.06);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;display:flex;flex-direction:column}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+a{color:var(--accent)}
+
+/* ---------- Top bar ---------- */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:13px}
+.brand-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:var(--ink);color:#fff}
+.brand-text h1{margin:0;font-size:1.1rem;font-weight:700;letter-spacing:-.01em}
+.brand-text p{margin:2px 0 0;font-size:.78rem;color:var(--ink-soft)}
+.statuses{display:flex;gap:10px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;background:#f6f7fa;border:1px solid var(--line);font-size:.78rem;font-weight:500}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-wait{background:var(--wait);animation:pulse 1.2s infinite}
+.dot-ok{background:var(--ok)}
+.dot-err{background:var(--err)}
+@keyframes pulse{50%{opacity:.35}}
+
+/* ---------- Split layout ---------- */
+.layout{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:18px 24px;align-items:stretch}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.panel-head h2{margin:0;font-size:.75rem;text-transform:uppercase;letter-spacing:.12em;color:var(--ink-soft)}
+.panel-head span{font-size:.75rem;color:var(--ink-soft)}
+
+/* Camera stage */
+.stage{position:relative;flex:1;min-height:300px;border-radius:12px;overflow:hidden;background:var(--viewport)}
+.stage video,.stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.stage.mirrored video{transform:scaleX(-1)}
+.stage-cover{position:absolute;inset:0;display:grid;place-items:center;background:radial-gradient(120% 120% at 50% 0%,#1a1e2a 0%,#0d0f14 70%);color:#e8eaf1;text-align:center;padding:24px}
+.stage-cover.hidden{display:none}
+.cover-inner h3{margin:0 0 8px;font-size:1.25rem}
+.cover-inner p{margin:0 0 18px;color:#a7adbe;font-size:.88rem}
+.cover-hint{margin-top:12px!important;font-size:.76rem!important;font-family:ui-monospace,monospace;max-width:48ch}
+.btn{font:inherit;font-weight:600;font-size:.9rem;border:none;border-radius:10px;padding:11px 22px;cursor:pointer;transition:transform .12s,opacity .12s}
+.btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.btn:disabled{opacity:.5;cursor:wait}
+.btn-primary{background:var(--accent);color:#fff;box-shadow:0 6px 18px rgba(77,91,249,.35)}
+.btn-primary:not(:disabled):hover{transform:translateY(-1px)}
+
+/* Readout */
+.hand-readout{display:flex;flex-wrap:wrap;gap:8px;font-family:ui-monospace,monospace;font-size:.75rem;min-height:34px}
+.readout-empty{color:var(--ink-soft);padding:8px 2px}
+.readout-card{background:#f6f7fa;border:1px solid var(--line);border-radius:9px;padding:7px 12px;display:flex;gap:12px;align-items:center}
+.readout-card b{font-weight:600}
+.readout-card .pinch-on{color:var(--accent);font-weight:600}
+.readout-card .pinch-off{color:var(--ink-soft)}
+
+/* Robot panel */
+.robot-stage{position:relative;flex:1;min-height:300px;border-radius:12px;overflow:hidden;
+  background:radial-gradient(90% 75% at 50% 30%,#ffffff 0%,#f2f4f8 100%)}
+.robot-stage canvas{position:absolute;inset:0;width:100%;height:100%}
+.robot-caption{font-size:.78rem;color:var(--ink-soft);text-align:center;min-height:18px}
+
+/* Settings bar */
+.settings{display:flex;flex-wrap:wrap;align-items:center;gap:18px;padding:10px 24px 18px;font-size:.84rem}
+.settings label{display:flex;align-items:center;gap:8px}
+.settings select{font-family:ui-monospace,monospace;font-size:.8rem;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:#fff}
+.settings input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+.legend{display:flex;gap:12px;margin-left:auto;flex-wrap:wrap}
+.legend i{width:10px;height:10px;border-radius:50%;display:inline-block;background:var(--c);margin-right:5px;vertical-align:-1px}
+.legend span{font-size:.76rem;color:var(--ink-soft)}
+
+.footer{padding:12px 24px 20px;font-size:.76rem;color:var(--ink-soft);border-top:1px solid var(--line)}
+.footer p{margin:0}
+
+/* Phone: camera on top, robot below */
+@media (max-width:820px){
+  .layout{grid-template-columns:1fr}
+  .stage,.robot-stage{min-height:46vh}
+  .topbar{flex-wrap:wrap}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="7" width="14" height="11" rx="3.5"/><path d="M12 7V4m0 0h.01M9 21h6"/>
+        <circle cx="9.5" cy="12.5" r="1"/><circle cx="14.5" cy="12.5" r="1"/><path d="M10 15.5h4"/>
+      </svg>
+    </span>
+    <div class="brand-text">
+      <h1>Robot Mimic</h1>
+      <p>Your hands on the left · a robot copying them on the right</p>
+    </div>
+  </div>
+  <div class="statuses">
+    <span class="pill" id="modelStatus"><span class="dot dot-wait"></span>Loading model…</span>
+    <span class="pill"><span class="mono" id="fpsValue">–</span>&nbsp;fps</span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- LEFT / TOP: hand tracking -->
+  <section class="panel">
+    <div class="panel-head"><h2>Your hands</h2><span>webcam · on-device</span></div>
+    <div class="stage" id="stage">
+      <video id="webcam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="stage-cover" id="stageCover">
+        <div class="cover-inner">
+          <h3>Point your camera at your hands</h3>
+          <p>Everything is processed locally — no video ever leaves your device.</p>
+          <button id="startBtn" class="btn btn-primary" disabled>Enable camera</button>
+          <p class="cover-hint" id="coverHint">Preparing the hand landmark model…</p>
+        </div>
+      </div>
+    </div>
+    <div class="hand-readout" id="handReadout">
+      <span class="readout-empty">No hands detected yet</span>
+    </div>
+  </section>
+
+  <!-- RIGHT / BOTTOM: robot mirror -->
+  <section class="panel">
+    <div class="panel-head"><h2>Robot mirror</h2><span>arms · hands · fingers</span></div>
+    <div class="robot-stage"><canvas id="robotCanvas"></canvas></div>
+    <div class="robot-caption" id="robotCaption">Waiting for the camera — I'll copy your hands.</div>
+  </section>
+</main>
+
+<div class="settings">
+  <label><span>Max hands</span>
+    <select id="numHands"><option value="1">1</option><option value="2" selected>2</option></select>
+  </label>
+  <label><input type="checkbox" id="showSkeleton" checked /><span>Show skeleton</span></label>
+  <label><input type="checkbox" id="mirrorView" checked /><span>Mirror view (selfie mode)</span></label>
+  <div class="legend">
+    <span><i style="--c:#f2c14e"></i>Thumb</span><span><i style="--c:#e8515c"></i>Index</span>
+    <span><i style="--c:#5bc0be"></i>Middle</span><span><i style="--c:#7d6ff2"></i>Ring</span>
+    <span><i style="--c:#e07be0"></i>Pinky</span>
+  </div>
+</div>
+
+<footer class="footer">
+  <p>Built on the <a href="https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker" target="_blank" rel="noopener">MediaPipe Hand Landmarker</a> task. Model and inference by Google AI Edge (Apache 2.0).</p>
+</footer>
+
+<script type="module">
+/* ==================================================================
+   Robot Mimic — core logic
+   1) Load the tasks-vision WASM runtime + hand_landmarker.task model
+   2) Open the webcam with getUserMedia
+   3) Every frame: detectForVideo() -> 21 normalized landmarks / hand
+   4) LEFT : draw the hand skeleton on a canvas overlay
+   5) RIGHT: distill each hand into {position, rotation, 5 finger
+      curls, pinch}, smooth it, and drive an articulated robot
+      (2-bone arm IK + segmented fingers) that mirrors the pose.
+   ================================================================== */
+import { HandLandmarker, FilesetResolver } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+const WASM_URL  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+
+/* ---------- Landmark tables ---------- */
+const FINGERS = {
+  thumb:{ids:[1,2,3,4],color:"#f2c14e"}, index:{ids:[5,6,7,8],color:"#e8515c"},
+  middle:{ids:[9,10,11,12],color:"#5bc0be"}, ring:{ids:[13,14,15,16],color:"#7d6ff2"},
+  pinky:{ids:[17,18,19,20],color:"#e07be0"},
+};
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17],
+];
+const FINGERTIPS=[4,8,12,16,20], WRIST=0, THUMB_TIP=4, INDEX_TIP=8, MIDDLE_MCP=9;
+// Joint chains used for curl estimation, thumb first.
+const CHAINS=[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+
+/* ---------- DOM ---------- */
+const $=(id)=>document.getElementById(id);
+const els={stage:$("stage"),video:$("webcam"),canvas:$("overlay"),cover:$("stageCover"),
+  coverHint:$("coverHint"),startBtn:$("startBtn"),modelStatus:$("modelStatus"),
+  fpsValue:$("fpsValue"),readout:$("handReadout"),robotCanvas:$("robotCanvas"),
+  robotCaption:$("robotCaption"),numHands:$("numHands"),
+  showSkeleton:$("showSkeleton"),mirrorView:$("mirrorView")};
+const ctx=els.canvas.getContext("2d");
+const rctx=els.robotCanvas.getContext("2d");
+
+const state={landmarker:null,running:false,mirror:true,showSkeleton:true,
+  lastVideoTime:-1,fps:{frames:0,last:performance.now()},results:null};
+
+function setStatus(kind,text){els.modelStatus.innerHTML=`<span class="dot dot-${kind}"></span>${text}`;}
+
+/* ---------- 1. Model init (GPU first, CPU fallback) ---------- */
+async function initModel(){
+  try{
+    const vision=await FilesetResolver.forVisionTasks(WASM_URL);
+    const make=(delegate)=>HandLandmarker.createFromOptions(vision,{
+      baseOptions:{modelAssetPath:MODEL_URL,delegate},
+      runningMode:"VIDEO",
+      numHands:Number(els.numHands.value),
+      minHandDetectionConfidence:0.5,
+      minHandPresenceConfidence:0.5,
+      minTrackingConfidence:0.5,
+    });
+    try{ state.landmarker=await make("GPU"); }
+    catch(e){ console.warn("GPU delegate failed, falling back to CPU",e);
+      state.landmarker=await make("CPU"); }
+    setStatus("ok","Model ready");
+    els.startBtn.disabled=false;
+    els.coverHint.textContent="Model loaded. Click “Enable camera” to begin.";
+  }catch(err){
+    console.error(err);
+    setStatus("err","Model failed to load");
+    els.coverHint.textContent="Could not load the model ("+(err?.message||err)+"). "+
+      "Check your internet connection, then reload. If you opened this file directly, "+
+      "serve it: python3 -m http.server 8000 → http://localhost:8000";
+  }
+}
+
+/* ---------- 2. Camera ---------- */
+async function startCamera(){
+  els.startBtn.disabled=true;
+  if(!navigator.mediaDevices?.getUserMedia){
+    els.coverHint.textContent="This browser does not expose the camera API here. "+
+      "Open the page via http://localhost or HTTPS.";
+    return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false});
+    els.video.srcObject=stream;
+    await new Promise((res)=>els.video.onloadedmetadata=res);
+    await els.video.play();
+    els.canvas.width=els.video.videoWidth;
+    els.canvas.height=els.video.videoHeight;
+    els.cover.classList.add("hidden");
+    state.running=true;
+  }catch(err){
+    console.error(err);
+    els.startBtn.disabled=false;
+    els.coverHint.textContent="Camera error: "+(err?.name||"")+". Allow camera permission "+
+      "for this page (and in OS privacy settings), then try again.";
+  }
+}
+
+/* ---------- Geometry helpers ---------- */
+const lerp=(a,b,k)=>a+(b-a)*k;
+const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
+const wrapAngle=(a)=>((a+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+const lerpAngle=(a,b,k)=>a+wrapAngle(b-a)*k; // blend along the shortest arc
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function angleAt(a,b,c){ // interior angle at b (radians)
+  const v1x=a.x-b.x,v1y=a.y-b.y,v2x=c.x-b.x,v2y=c.y-b.y;
+  const d=(v1x*v2x+v1y*v2y)/(Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y)||1e-6);
+  return Math.acos(clamp(d,-1,1));
+}
+// Scale-invariant pinch: thumb-tip↔index-tip distance / palm size
+function isPinching(lms){
+  const d=dist(lms[THUMB_TIP],lms[INDEX_TIP]);
+  const hand=dist(lms[WRIST],lms[MIDDLE_MCP]);
+  return hand>0&&d/hand<0.35;
+}
+// Curl per finger in 0..1: how far the two middle joints deviate from straight.
+function fingerCurls(lms){
+  return CHAINS.map((c,fi)=>{
+    const dev=(Math.PI-angleAt(lms[c[0]],lms[c[1]],lms[c[2]]))
+             +(Math.PI-angleAt(lms[c[1]],lms[c[2]],lms[c[3]]));
+    return clamp(dev/(fi===0?1.4:2.4),0,1); // thumb has a smaller range
+  });
+}
+// Distill one detected hand into the signal the robot consumes.
+function handPose(lms){
+  const nx=(v)=>state.mirror?1-v:v;
+  const w=lms[WRIST],m=lms[MIDDLE_MCP];
+  const rot=wrapAngle(Math.atan2(m.y-w.y,nx(m.x)-nx(w.x))+Math.PI/2); // 0 = fingers up
+  return {x:nx(w.x),y:w.y,rot,curls:fingerCurls(lms),pinch:isPinching(lms)};
+}
+
+/* ---------- 3. Detection + main loop (always running) ---------- */
+function loop(now){
+  if(state.running&&els.video.currentTime!==state.lastVideoTime){
+    state.lastVideoTime=els.video.currentTime;
+    state.results=state.landmarker.detectForVideo(els.video,performance.now());
+    tickFps();
+  }
+  const hands=state.results?.landmarks??[];
+  const handedness=state.results?.handedness??[];
+  if(state.running)renderOverlay(hands,handedness);
+  robotUpdate(hands.map(handPose),now);
+  robotRender(now);
+  requestAnimationFrame(loop);
+}
+function tickFps(){
+  const f=state.fps;f.frames++;
+  const now=performance.now();
+  if(now-f.last>=1000){els.fpsValue.textContent=String(f.frames);f.frames=0;f.last=now;}
+}
+
+/* ---------- 4. LEFT panel: skeleton overlay ---------- */
+function toPx(lm){return{x:(state.mirror?1-lm.x:lm.x)*els.canvas.width,y:lm.y*els.canvas.height};}
+function renderOverlay(hands,handedness){
+  ctx.clearRect(0,0,els.canvas.width,els.canvas.height);
+  if(state.showSkeleton)hands.forEach(drawSkeleton);
+  updateReadout(hands,handedness);
+}
+function drawSkeleton(lms){
+  ctx.lineWidth=3;ctx.lineCap="round";
+  for(const[a,b]of CONNECTIONS){
+    const p1=toPx(lms[a]),p2=toPx(lms[b]);
+    ctx.strokeStyle="rgba(255,255,255,0.55)";
+    ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.stroke();
+  }
+  const colorOf=(i)=>{for(const f of Object.values(FINGERS))if(f.ids.includes(i))return f.color;return"#fff";};
+  lms.forEach((lm,i)=>{
+    const p=toPx(lm);
+    const r=FINGERTIPS.includes(i)?8:i===WRIST?9:5;
+    ctx.fillStyle=colorOf(i);
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle="rgba(13,15,20,0.6)";ctx.lineWidth=1.5;ctx.stroke();
+  });
+}
+function updateReadout(hands,handedness){
+  if(!hands.length){els.readout.innerHTML=`<span class="readout-empty">No hands detected</span>`;return;}
+  els.readout.innerHTML=hands.map((lms,i)=>{
+    let label=handedness[i]?.[0]?.categoryName??"Hand";
+    if(state.mirror)label=label==="Left"?"Right":label==="Right"?"Left":label;
+    const score=handedness[i]?.[0]?.score??0;
+    const pinch=isPinching(lms);
+    const tip=lms[INDEX_TIP];
+    return`<div class="readout-card"><b>${label}</b><span>${(score*100).toFixed(0)}%</span>`+
+      `<span class="${pinch?"pinch-on":"pinch-off"}">${pinch?"PINCH":"open"}</span>`+
+      `<span>idx ${(state.mirror?1-tip.x:tip.x).toFixed(2)}, ${tip.y.toFixed(2)}</span></div>`;
+  }).join("");
+}
+
+/* ==================================================================
+   5. RIGHT panel: the robot
+   The robot lives in its own coordinate system (roughly -280..280 on
+   both axes), scaled to fit the canvas.
+   POSTURE IS FIXED: each elbow stays bent with the forearm raised
+   upward in front of the body, palms facing the viewer, thumbs
+   pointing inward toward each other and pinkies outward. Only the
+   WRIST ROTATION and the FINGER JOINTS animate — each arm keeps a
+   smoothed pose {active, rot, curls[5], pinch} that eases toward the
+   latest measured hand pose (or back to an idle pose when the hand
+   disappears), which is what makes the motion feel smooth.
+   ================================================================== */
+const robot={
+  arms:[ // 0 = robot's screen-left arm, 1 = screen-right
+    // shoulder → elbow (bent, slightly out and down) → hand (raised up)
+    {side:-1,shoulder:{x:-86,y:-4},elbow:{x:-122,y:60},hand:{x:-116,y:-8},
+     active:0,rot:0,curls:[.35,.35,.35,.35,.35],pinch:0},
+    {side: 1,shoulder:{x: 86,y:-4},elbow:{x: 122,y:60},hand:{x: 116,y:-8},
+     active:0,rot:0,curls:[.35,.35,.35,.35,.35],pinch:0},
+  ],
+  blink:1,nextBlink:performance.now()+2200,eyeTarget:{x:0,y:0},eye:{x:0,y:0},happy:0,
+};
+// Idle pose the wrists/fingers relax into when no hand drives them.
+const IDLE=(side,t)=>({rot:side*0.06+Math.sin(t/1300+side)*0.04,
+  curls:[.35,.4,.4,.4,.45].map((c,i)=>c+Math.sin(t/700+i)*0.04),pinch:0});
+
+const MAX_WRIST_ROT=1.25; // rad — keep the palm facing the viewer
+
+/* Assign detected hands to arms by horizontal position, then smooth.
+   Only rotation + finger curls are retargeted; the arm posture is fixed. */
+function robotUpdate(poses,now){
+  const t=now??performance.now();
+  const claimed=[null,null];
+  for(const p of poses.slice(0,2)){
+    const want=p.x<0.5?0:1;
+    if(!claimed[want])claimed[want]=p;
+    else if(!claimed[1-want])claimed[1-want]=p;
+  }
+  robot.arms.forEach((arm,i)=>{
+    const p=claimed[i];
+    const goal=p??IDLE(arm.side,t);
+    const k=p?0.3:0.08; // snappy when tracking, gentle when relaxing
+    arm.active=lerp(arm.active,p?1:0,0.12);
+    // Wrist: shortest-path angle blend, clamped so the palm keeps facing forward.
+    arm.rot=clamp(lerpAngle(arm.rot,goal.rot,k),-MAX_WRIST_ROT,MAX_WRIST_ROT);
+    arm.curls=arm.curls.map((c,f)=>lerp(c,goal.curls[f],p?0.35:0.08));
+    arm.pinch=lerp(arm.pinch,goal.pinch?1:0,0.2);
+  });
+  // Face: eyes glance toward the average hand, smile when pinching.
+  const tracking=poses.length>0;
+  if(tracking){
+    const ax=poses.reduce((s,p)=>s+p.x,0)/poses.length;
+    const ay=poses.reduce((s,p)=>s+p.y,0)/poses.length;
+    robot.eyeTarget={x:(ax-0.5)*14,y:(ay-0.5)*10};
+  }else robot.eyeTarget={x:0,y:Math.sin(t/1600)*2};
+  robot.eye.x=lerp(robot.eye.x,robot.eyeTarget.x,0.1);
+  robot.eye.y=lerp(robot.eye.y,robot.eyeTarget.y,0.1);
+  robot.happy=lerp(robot.happy,poses.some(p=>p.pinch)?1:0,0.15);
+  // Blink scheduling
+  if(t>robot.nextBlink){robot.blink=0;robot.nextBlink=t+2000+Math.random()*2600;}
+  robot.blink=lerp(robot.blink,1,0.25);
+  // Caption
+  els.robotCaption.textContent=!state.running
+    ?"Waiting for the camera — I'll copy your hands."
+    :tracking?`Mirroring ${poses.length} hand${poses.length>1?"s":""}${poses.some(p=>p.pinch)?" · pinch!":""}`
+    :"Show your hands to the camera — I'll copy you.";
+}
+
+/* ---------- Robot drawing ---------- */
+function rr(c,x,y,w,h,r){ // rounded rect path
+  c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();
+}
+function capsule(c,x1,y1,x2,y2,w,fill,stroke){
+  c.lineCap="round";
+  c.strokeStyle=stroke;c.lineWidth=w+4;
+  c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
+  c.strokeStyle=fill;c.lineWidth=w;
+  c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();
+}
+const C={shell:"#f7f8fb",edge:"#c7cdd8",dark:"#343a46",joint:"#4a515f",
+  visor:"#171b24",cyan:"#4fd8e4",cyanSoft:"rgba(79,216,228,0.35)"};
+
+function robotRender(now){
+  const t=now??performance.now();
+  const cv=els.robotCanvas,c=rctx;
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth,H=cv.clientHeight;
+  if(cv.width!==W*dpr||cv.height!==H*dpr){cv.width=W*dpr;cv.height=H*dpr;}
+  c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,W,H);
+
+  const s=Math.min(W/620,H/620);
+  const bob=Math.sin(t/1100)*4; // idle breathing
+  c.save();
+  c.translate(W/2,H/2+20*s);
+  c.scale(s,s);
+
+  // Shadow
+  c.fillStyle="rgba(23,26,33,0.10)";
+  c.beginPath();c.ellipse(0,238,150,20,0,0,Math.PI*2);c.fill();
+
+  c.translate(0,bob);
+
+  // Legs + feet
+  for(const sd of[-1,1]){
+    rr(c,sd*24+(sd<0?-40:0),120,40,84,18);c.fillStyle=C.shell;c.fill();
+    c.strokeStyle=C.edge;c.lineWidth=2.5;c.stroke();
+    c.fillStyle=C.joint;c.beginPath();c.arc(sd*44,132,12,0,Math.PI*2);c.fill();
+    rr(c,sd*20+(sd<0?-58:0),196,58,26,13);c.fillStyle=C.shell;c.fill();c.stroke();
+  }
+  // Waist bellows
+  for(let i=0;i<3;i++){rr(c,-26,86+i*12,52,9,4.5);c.fillStyle=i%2?C.dark:C.joint;c.fill();}
+
+  // Arms (drawn before the body so shoulders tuck behind it)
+  robot.arms.forEach(drawArm.bind(null,c));
+
+  // Body
+  rr(c,-78,-32,156,124,34);c.fillStyle=C.shell;c.fill();
+  c.strokeStyle=C.edge;c.lineWidth=3;c.stroke();
+  c.beginPath();c.arc(34,14,15,0,Math.PI*2);c.strokeStyle=C.cyan;c.lineWidth=4;
+  c.shadowColor=C.cyanSoft;c.shadowBlur=10;c.stroke();c.shadowBlur=0;
+
+  // Neck bellows
+  for(let i=0;i<2;i++){rr(c,-16,-52+i*10,32,8,4);c.fillStyle=i%2?C.joint:C.dark;c.fill();}
+
+  // Head group (slight tilt toward the tracked hands)
+  const tilt=clamp(robot.eye.x/90,-0.09,0.09);
+  c.save();c.translate(0,-150);c.rotate(tilt);
+  // Ears
+  for(const sd of[-1,1]){
+    rr(c,sd*118+(sd<0?-16:0),-34,16,68,8);c.fillStyle=C.shell;c.fill();
+    c.strokeStyle=C.edge;c.lineWidth=2.5;c.stroke();
+    c.fillStyle=C.cyan;c.shadowColor=C.cyanSoft;c.shadowBlur=8;
+    rr(c,sd*118+(sd<0?-11:5),-22,6,44,3);c.fill();c.shadowBlur=0;
+  }
+  // Antennas — tips glow brighter while mirroring
+  const glow=0.45+0.55*Math.max(robot.arms[0].active,robot.arms[1].active);
+  for(const sd of[-1,1]){
+    c.strokeStyle=C.joint;c.lineWidth=4;
+    c.beginPath();c.moveTo(sd*66,-86);c.lineTo(sd*76,-124);c.stroke();
+    c.fillStyle=C.cyan;c.globalAlpha=glow;c.shadowColor=C.cyan;c.shadowBlur=12;
+    c.beginPath();c.arc(sd*76,-130,8,0,Math.PI*2);c.fill();
+    c.globalAlpha=1;c.shadowBlur=0;
+  }
+  // Head shell + visor
+  rr(c,-112,-92,224,178,72);c.fillStyle=C.shell;c.fill();
+  c.strokeStyle=C.edge;c.lineWidth=3;c.stroke();
+  rr(c,-88,-64,176,126,48);c.fillStyle=C.visor;c.fill();
+
+  // Eyes: glowing ovals that blink, squint into arcs when happy
+  const ex=robot.eye.x,ey=robot.eye.y,bl=robot.blink,hp=robot.happy;
+  c.shadowColor=C.cyan;c.shadowBlur=16;
+  for(const sd of[-1,1]){
+    const cx=sd*44+ex,cy=-14+ey;
+    if(hp>0.5){ // happy arc "^ ^"
+      c.strokeStyle=C.cyan;c.lineWidth=8;c.lineCap="round";
+      c.beginPath();c.arc(cx,cy+8,17,Math.PI*1.15,Math.PI*1.85);c.stroke();
+    }else{
+      c.fillStyle=C.cyan;
+      c.beginPath();c.ellipse(cx,cy,15,26*Math.max(bl,0.06),0,0,Math.PI*2);c.fill();
+    }
+  }
+  // Smile — widens when happy
+  c.strokeStyle=C.cyan;c.lineWidth=6;c.lineCap="round";
+  c.beginPath();c.arc(0+ex*0.4,26+ey*0.4,14+8*hp,Math.PI*0.15,Math.PI*0.85);c.stroke();
+  c.shadowBlur=0;
+  c.restore(); // head
+
+  c.restore(); // robot space
+}
+
+/* FIXED posture: shoulder → bent elbow → forearm raised up in front of
+   the body. Only the wrist (rotation) and fingers (curls) animate. */
+function drawArm(c,arm){
+  const S=arm.shoulder,E=arm.elbow,H=arm.hand;
+
+  capsule(c,S.x,S.y,E.x,E.y,26,C.shell,C.edge);      // upper arm (down + out)
+  capsule(c,E.x,E.y,H.x,H.y,22,C.shell,C.edge);      // forearm (raised up)
+  c.fillStyle=C.joint;                                // shoulder + elbow caps
+  c.beginPath();c.arc(S.x,S.y,15,0,Math.PI*2);c.fill();
+  c.beginPath();c.arc(E.x,E.y,12,0,Math.PI*2);c.fill();
+  c.strokeStyle=C.cyan;c.lineWidth=2.5;
+  c.beginPath();c.arc(E.x,E.y,12,0,Math.PI*2);c.stroke();
+
+  drawHand(c,arm,H);
+}
+
+/* Articulated 5-finger hand shown PALM-FORWARD (toward the viewer).
+   Finger layout mirrors per arm so both thumbs point inward toward
+   each other and both pinkies point outward. Each finger is a chain
+   of segments whose joints rotate by curl * bend-per-segment. */
+const FING=[ // [segment lengths], base x offset in palm space, fan angle
+  {seg:[24,18],x:0,fan:0,thumb:true},          // thumb (side handled below)
+  {seg:[26,20,14],x:-20,fan:-0.16},            // index
+  {seg:[28,22,15],x:-7,fan:-0.05},             // middle
+  {seg:[25,20,14],x:6,fan:0.06},               // ring
+  {seg:[20,15,11],x:19,fan:0.17},              // pinky
+];
+function drawHand(c,arm,pos){
+  c.save();
+  c.translate(pos.x,pos.y);
+  // Palm stays facing the viewer; default fingers point straight up.
+  // Only the measured wrist rotation (mirrored, clamped) is applied.
+  c.rotate(arm.rot*(0.25+0.75*arm.active));
+
+  // Wrist joint
+  c.fillStyle=C.joint;
+  c.beginPath();c.arc(0,26,11,0,Math.PI*2);c.fill();
+
+  // Fingers first (behind the palm plate)
+  const s=arm.side; // -1 screen-left arm, +1 screen-right arm
+  for(let f=0;f<FING.length;f++){
+    const def=FING[f];
+    const curl=arm.curls[f];
+    let x,y,ang;
+    if(def.thumb){ // thumb sits on the INNER edge (toward the body center)
+      x=-s*32; y=8; ang=-Math.PI/2-s*(0.55-curl*0.3);
+    }else{ // pinky (largest offset) lands on the OUTER edge
+      x=s*def.x; y=-12; ang=-Math.PI/2+s*def.fan;
+    }
+    const bend=(def.thumb?0.75:0.62)*curl;   // per-segment fold
+    const foldDir=s;                          // fold toward the palm center
+    for(let sIdx=0;sIdx<def.seg.length;sIdx++){
+      ang+=foldDir*bend;
+      const nx=x+Math.cos(ang)*def.seg[sIdx];
+      const ny=y+Math.sin(ang)*def.seg[sIdx];
+      capsule(c,x,y,nx,ny,sIdx===def.seg.length-1?9:11,C.shell,C.edge);
+      c.fillStyle=C.dark;
+      c.beginPath();c.arc(x,y,4.5,0,Math.PI*2);c.fill();
+      x=nx;y=ny;
+    }
+  }
+
+  // Palm plate
+  rr(c,-27,-14,54,48,14);
+  c.fillStyle=C.shell;c.fill();
+  c.strokeStyle=C.edge;c.lineWidth=2.5;c.stroke();
+  // Pinch indicator on the palm
+  c.strokeStyle=C.cyan;c.globalAlpha=0.35+0.65*arm.pinch;
+  c.shadowColor=C.cyanSoft;c.shadowBlur=8*arm.pinch;
+  c.lineWidth=3;c.beginPath();c.arc(0,10,9,0,Math.PI*2);c.stroke();
+  c.globalAlpha=1;c.shadowBlur=0;
+  c.restore();
+}
+
+/* ---------- UI wiring ---------- */
+els.numHands.addEventListener("change",async()=>{
+  if(state.landmarker)await state.landmarker.setOptions({numHands:Number(els.numHands.value)});
+});
+els.showSkeleton.addEventListener("change",()=>state.showSkeleton=els.showSkeleton.checked);
+els.mirrorView.addEventListener("change",()=>{
+  state.mirror=els.mirrorView.checked;
+  els.stage.classList.toggle("mirrored",state.mirror);
+});
+els.startBtn.addEventListener("click",startCamera);
+
+/* ---------- Boot ---------- */
+els.stage.classList.add("mirrored");
+setStatus("wait","Loading model…");
+initModel();
+requestAnimationFrame(loop); // robot idles even before the camera starts
+</script>
+</body>
+</html>
