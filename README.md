@@ -1,4 +1,4 @@
-# Robot Mimic — Hand Tracking Playground v3
+# Robot Mimic — Hand Tracking Playground v2
 
 A split-screen app: the **left panel** (top panel on phones) shows real-time webcam hand tracking, and the **right panel** (bottom on phones) shows a friendly white robot — rounded head, dark visor, glowing cyan eyes, antennas — that **mirrors your hand gestures live**: arm position, wrist rotation, and the curl of all five fingers. A Python desktop version of the tracker (`hand_tracking.py`) is included. Both are powered by the same model: the **MediaPipe Hand Landmarker** task from Google AI Edge.
 
@@ -106,8 +106,8 @@ An extended finger deviates ~0 rad → curl 0; a fist bends each joint ~70–90�
 
 | File | What it is |
 | --- | --- |
-| `hand_tracking_web.html` | The complete split-screen app in one self-contained file (HTML + CSS + JS inline): tracking panel + robot mirror. Serve from `localhost`/HTTPS for camera access; panels stack vertically on phones. |
-| `hand_tracking.py` | The Python desktop tracker (`pip install mediapipe opencv-python`, then `python hand_tracking.py`). Auto-downloads the model; Q quits, M toggles mirror, S toggles skeleton. |
+| `index.html` | The complete split-screen app in one self-contained file (HTML + CSS + JS inline): tracking panel + robot mirror. Serve from `localhost`/HTTPS for camera access; panels stack vertically on phones. |
+| `robot_mimic.py` | The Python desktop tracker (`pip install mediapipe opencv-python`, then `python robot_mimic.py`). Auto-downloads the model; Q quits, M toggles mirror, S toggles skeleton. |
 | `README.md` | This document. |
 | `LICENSE` | MIT license for this project's own code. |
 
