@@ -1,6 +1,6 @@
 # Robot Mimic — Hand Tracking Playground v2
 
-A split-screen app: the **left panel** (top panel on phones) shows real-time webcam hand tracking, and the **right panel** (bottom on phones) shows a friendly white robot — rounded head, dark visor, glowing cyan eyes, antennas — that **mirrors your hand gestures live**: arm position, wrist rotation, and the curl of all five fingers. A Python desktop version of the tracker (`hand_tracking.py`) is included. Both are powered by the same model: the **MediaPipe Hand Landmarker** task from Google AI Edge.
+A split-screen app: the **left panel** (top panel on phones) shows real-time webcam hand tracking, and the **right panel** (bottom on phones) shows a friendly white robot — rounded head, dark visor, glowing cyan eyes, antennas — that **mirrors your hand gestures live**: arm position, wrist rotation, and the curl of all five fingers. A Python desktop version of the tracker (`robot_mimic.py`) is included. Both are powered by the same model: the **MediaPipe Hand Landmarker** task from Google AI Edge.
 
 ---
 
@@ -127,4 +127,4 @@ An extended finger deviates ~0 rad → curl 0; a fist bends each joint ~70–90�
 
 ## Licenses
 
-App code in this repository: MIT. MediaPipe Hand Landmarker model, runtimes, and sample code: Apache 2.0, © Google. Landmark diagram image: © Google, CC BY 4.0. The robot character is original vector artwork drawn in canvas, inspired by a user-provided reference image.
+App code in this repository: MIT. MediaPipe Hand Landmarker model, runtimes, and sample code: Apache 2.0, © Google. Landmark diagram image: © Google, CC BY 4.0. The robot mimic idea is made by Michael Ngo.
